@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
-import {toast} from 'react-toastify';
+import { toast } from 'react-toastify';
 import { db } from '@/firebase';
 import { ref, set, update, serverTimestamp } from 'firebase/database';
+import { ethers } from 'ethers';
 
 import styles from '../page.module.css';
 import { useAppContext, type gameStateType } from '../utils/context/context';
 import { saveGameState } from '../utils/localStorage';
-import { deployHasher, deployRPS } from '../deployScripts/deployScript';
+import { deployRPS } from '../deployScripts/deployScript';
 import { GameItem, InputForm, NumberInput } from '../utils/UI/UIcomponents';
-
 
 type Props = {
   selectedCircle: string | null;
@@ -39,24 +39,22 @@ export default function StartGame({ selectedCircle }: Props) {
     }
   };
 
-
-
- 
-
-  
   useEffect(() => {
     if (!address) {
       setAddress(Data.selectedAddress);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [Data.selectedAddress]);
 
-  
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let HasherContract: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let RPSContract: any;
+
+  // Compute hash locally instead of deploying contract
+  const computeHash = (moveNumber: number, salt: string): string => {
+    return ethers
+      .solidityPacked(['uint8', 'uint256'], [moveNumber, salt])
+      .slice(2); // Remove '0x' prefix
+  };
 
   const startGame = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,20 +63,11 @@ export default function StartGame({ selectedCircle }: Props) {
     if (!inputValidator(address1)) return;
 
     const toastId = toast.loading('Starting game...');
-    
+
     try {
-      HasherContract = await deployHasher();
-
-      toast.update(toastId, {
-        render: '🎉 Hasher Contract deployed',
-        type: 'success',
-        isLoading: true,
-        autoClose: 3000,
-      });
-
-      const hashedMove = await HasherContract.hash(
-        getMoveNumber(selectedCircle),
-        secretKey
+      const moveNumber = getMoveNumber(selectedCircle);
+      const hashedMove = ethers.keccak256(
+        ethers.solidityPacked(['uint8', 'uint256'], [moveNumber, secretKey])
       );
 
       toast.update(toastId, {
@@ -99,8 +88,6 @@ export default function StartGame({ selectedCircle }: Props) {
 
       // const timer = RPSContract.lastAction();
 
-    
-
       const data = {
         player1: address1,
         player2: address,
@@ -120,12 +107,18 @@ export default function StartGame({ selectedCircle }: Props) {
         },
       };
 
-      await update(ref(db, process.env.NEXT_PUBLIC_PLAYERS_PATH + address1), gameAdd);
-      await update(ref(db, process.env.NEXT_PUBLIC_PLAYERS_PATH + address), gameAdd);
+      await update(
+        ref(db, process.env.NEXT_PUBLIC_PLAYERS_PATH + address1),
+        gameAdd
+      );
+      await update(
+        ref(db, process.env.NEXT_PUBLIC_PLAYERS_PATH + address),
+        gameAdd
+      );
 
       await set(ref(db, process.env.NEXT_PUBLIC_GAMES_PATH + gameId), data);
-// here address1 is concatenated with gameId , which makes it unique, doesnt interfere with other players, when played in same browser
-      saveGameState(gameId+address1, secretKey, selectedCircle as string);
+      // here address1 is concatenated with gameId , which makes it unique, doesnt interfere with other players, when played in same browser
+      saveGameState(gameId + address1, secretKey, selectedCircle as string);
 
       toast.update(toastId, {
         render: '🎉 Game started successfully!',
@@ -146,14 +139,20 @@ export default function StartGame({ selectedCircle }: Props) {
   };
 
   function generateSecureRandomNumber() {
-    const array = new Uint32Array(2);
+    // Generate exactly 32 bytes (256 bits) of random data
+    const array = new Uint8Array(32);
     window.crypto.getRandomValues(array);
-    const randomNumber = array[0].toString() + array[1].toString();
-    setSecretKey(randomNumber.slice(0, 25));
+
+    // Convert to BigInt maintaining full 256-bit precision
+    const value = array.reduce((acc, byte) => (acc << 8n) + BigInt(byte), 0n);
+
+    // Ensure the number is within uint256 range (0 to 2^256 - 1)
+    const maxUint256 = BigInt(2) ** BigInt(256) - BigInt(1);
+    const finalValue = value & maxUint256;
+
+    // Convert to decimal string (will be up to 78 digits)
+    setSecretKey(finalValue.toString());
   }
-
-
-  
 
   function inputValidator(address1: string) {
     if (!address) {
@@ -171,9 +170,7 @@ export default function StartGame({ selectedCircle }: Props) {
       return false;
     }
     if (!amount) {
-      toast.warn(
-        `Please enter an amount greater than or equal to 0.001 ETH`
-      );
+      toast.warn(`Please enter an amount greater than or equal to 0.001 ETH`);
       return false;
     }
     if (!address1) {
@@ -209,19 +206,15 @@ export default function StartGame({ selectedCircle }: Props) {
           Start Game
         </button>
         <p className={styles.note}>
-          {Data?.GameData?.gameState === 'yetToStart'  ? (
+          {Data?.GameData?.gameState === 'yetToStart' ? (
             <span>
               The secret key is used to add a salt to your move for security.
             </span>
           ) : (
-            <span>
-              tap + on top left for a new game.{' '}
-            </span>
+            <span>tap + on top left for a new game. </span>
           )}{' '}
         </p>
       </form>
     </div>
   );
 }
-
-

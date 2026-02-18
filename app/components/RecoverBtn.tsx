@@ -15,11 +15,9 @@ import RPSArtifact from '../../Contract/build/RPS.json';
 export default function RecoverBtn() {
   const Data = useAppContext();
 
-
   const recoverFunds = async (e: React.FormEvent) => {
     e.preventDefault();
 
-  
     const address = Data.owner;
 
     if (!address) {
@@ -27,18 +25,31 @@ export default function RecoverBtn() {
       return;
     }
 
+    // SECURITY: Verify game hasn't already been won/recovered
+    if (Data.GameData.won_Recovered_By !== '') {
+      toast.warn('This game has already been completed.');
+      return;
+    }
+
+    // SECURITY: Verify 5-minute timeout has actually passed
+    if (
+      !Data.GameData.timer ||
+      Date.now() <= Number(Data.GameData.timer) + 5 * 60 * 1000
+    ) {
+      toast.warn('The 5-minute timeout period has not passed yet.');
+      return;
+    }
 
     try {
       if (!window.ethereum) {
         throw new Error('Please install MetaMask to continue');
-        return
+        return;
       }
       const provider = new ethers.BrowserProvider(window.ethereum);
       // Request account access
       await provider.send('eth_requestAccounts', []);
       // Get the signer
       const signer = await provider.getSigner();
-
 
       const RPSContract = new Contract(
         Data.GameData.RPSaddress,
@@ -47,6 +58,12 @@ export default function RecoverBtn() {
       );
 
       if (address === Data.GameData.player1) {
+        // SECURITY: Verify P2 never joined before calling j2Timeout
+        const c2Move = await RPSContract.c2();
+        if (c2Move !== 0) {
+          toast.error('P2 has played. Use solve() instead of timeout.');
+          return;
+        }
         await RPSContract.j2Timeout();
 
         resetGameState(Data.currentGameId + Data.GameData.player1);
@@ -61,53 +78,57 @@ export default function RecoverBtn() {
           data
         );
 
-
         toast.success('Funds recovered successfully');
-
       } else if (address === Data.GameData.player2) {
         await RPSContract.j1Timeout();
 
-
         const data = {
-          gameState:'recovered' as gameStateType,
+          gameState: 'recovered' as gameStateType,
           won_Recovered_By: Data.GameData.player2,
-          timer : Date.now()
+          timer: Date.now(),
         };
         await update(
           ref(db, process.env.NEXT_PUBLIC_GAMES_PATH + Data.currentGameId),
           data
         );
-         toast.success('Funds recovered successfully');
+        toast.success('Funds recovered successfully');
       }
 
       const gameUpdate = {
-        
-          status: 'recovered',
-        
-      }
+        status: 'recovered',
+      };
 
       await update(
-        ref(db, process.env.NEXT_PUBLIC_PLAYERS_PATH + Data.GameData.player1+ '/' + Data.currentGameId),
+        ref(
+          db,
+          process.env.NEXT_PUBLIC_PLAYERS_PATH +
+            Data.GameData.player1 +
+            '/' +
+            Data.currentGameId
+        ),
         gameUpdate
       );
       await update(
-        ref(db, process.env.NEXT_PUBLIC_PLAYERS_PATH + Data.GameData.player2 + '/' + Data.currentGameId),
+        ref(
+          db,
+          process.env.NEXT_PUBLIC_PLAYERS_PATH +
+            Data.GameData.player2 +
+            '/' +
+            Data.currentGameId
+        ),
         gameUpdate
       );
-
-
-
     } catch (error) {
       console.error('Error recovering funds:', error);
-        toast.error('Failed to recover funds. Please try again.');
+      toast.error('Failed to recover funds. Please try again.');
     }
   };
 
   const disableRecoverBtn = (): boolean => {
+    if (Data.GameData.won_Recovered_By !== '' || !Data.GameData.timer)
+      return true;
 
-    if (Data.GameData.won_Recovered_By !== '' || !Data.GameData.timer) return true;
-
-    if ( Date.now() >( Number(Data.GameData.timer) + 5 * 60 * 1000)) {
+    if (Date.now() > Number(Data.GameData.timer) + 5 * 60 * 1000) {
       if (Data.owner === Data.GameData.player1) {
         return !(Data.GameData.gameState === 'started');
       } else if (Data.owner === Data.GameData.player2) {
